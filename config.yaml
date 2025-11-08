@@ -1,0 +1,27 @@
+mode: paper
+poll_seconds: 60
+default_symbol: ETHUSDT
+default_market: USDM
+exchange:
+  apiKey: ""
+  secret: ""
+  password: ""
+strategy:
+  ema_short: 21
+  ema_long: 55
+  ema_signal: 100
+  rsi_period: 14
+  take_profit_pct: 1.2
+  stop_loss_pct: 0.8
+  vol_lookback: 20
+ui:
+  theme: dark
+  max_predictions: 50
+levels:
+  window_pct: 8
+  cluster_tol_pct: 0.12
+  max_per_side: 12
+  draw_top: 3
+tolerances:
+  entry_pct: 0.03
+  hit_pct: 0.03
