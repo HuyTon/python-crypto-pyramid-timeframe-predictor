@@ -1,0 +1,8 @@
+bot_token: 8499966399:AAGj7qRWxsDnNgVA0xGxU0-k3ptv6jDlibM
+chat_id: '1267618221'
+enabled: true
+min_change_pct: 0.02
+watch_symbols:
+- ETHUSDT
+- BTCUSDT
+- BNBUSDT

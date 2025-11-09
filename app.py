@@ -1,4 +1,4 @@
-import os, yaml
+import os, yaml, json
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -8,6 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import csv
+import httpx
 import streamlit.components.v1 as components  # HTML divider iOS safe
 
 from broker import Broker
@@ -33,9 +34,12 @@ def ios_safe_divider():
 # Prediction history local file
 # ---------------------
 SGT = ZoneInfo("Asia/Singapore")
-PRED_DIR = Path("data")
-PRED_DIR.mkdir(exist_ok=True)
-PRED_FILE = PRED_DIR / "prediction_history.csv"
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+PRED_FILE = DATA_DIR / "prediction_history.csv"
+TELE_CFG_FILE = DATA_DIR / "telegram.yaml"
+TELE_STATE_FILE = DATA_DIR / "telewatch_state.json"
 
 def _pred_to_row(rec: dict) -> list:
     return [
@@ -70,7 +74,7 @@ def load_pred_history() -> list:
     with PRED_FILE.open("r", newline="", encoding="utf-8") as f:
         reader = csv.reader(f)
         rows = list(reader)
-        start = 1 if rows and rows[0][0].lower() == "timestamp" else 0
+        start = 1 if rows and rows[0] and rows[0][0].lower() == "timestamp" else 0
         for r in rows[start:]:
             if not r: continue
             try: out.append(_row_to_pred(r))
@@ -88,6 +92,94 @@ def clear_pred_history():
     if PRED_FILE.exists():
         PRED_FILE.unlink()
     st.session_state.pred_history = []
+
+
+# ---------------------
+# Telegram helpers
+# ---------------------
+def load_telegram_cfg() -> dict:
+    if TELE_CFG_FILE.exists():
+        try:
+            return yaml.safe_load(TELE_CFG_FILE.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+    return {}
+
+def save_telegram_cfg(cfg: dict):
+    TELE_CFG_FILE.parent.mkdir(exist_ok=True)
+    with TELE_CFG_FILE.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, allow_unicode=True)
+
+def _load_tele_state() -> dict:
+    if TELE_STATE_FILE.exists():
+        try:
+            return json.loads(TELE_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+def _save_tele_state(state: dict):
+    TELE_STATE_FILE.parent.mkdir(exist_ok=True)
+    TELE_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+def send_telegram(bot_token: str, chat_id: str, text: str) -> bool:
+    if not bot_token or not chat_id:
+        return False
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    try:
+        with httpx.Client(timeout=10) as cli:
+            r = cli.post(url, data=payload)
+            r.raise_for_status()
+            return True
+    except Exception:
+        return False
+
+def notify_if_entry_changed(sym: str, side: str, entry: float, tp: float, sl: float,
+                            price_now: float, tele_cfg: dict):
+    if not tele_cfg.get("enabled"):
+        return
+    token = tele_cfg.get("bot_token", "")
+    chat_id = tele_cfg.get("chat_id", "")
+    if not token or not chat_id:
+        return
+
+    state = _load_tele_state()
+    last = state.get(sym, {}).get("last_entry")
+    changed = False
+    if last is None:
+        changed = True
+    else:
+        try:
+            prev = float(last)
+            base = prev if prev != 0 else entry
+            delta = abs(entry - prev) / max(1e-9, base) * 100.0
+            changed = delta >= float(tele_cfg.get("min_change_pct", 0.02))
+        except Exception:
+            changed = True
+
+    if not changed:
+        return
+
+    ts = datetime.now(SGT).strftime("%Y-%m-%d %H:%M:%S")
+    emoji = "🟢" if side.upper() == "BUY" else "🔴"
+    txt = (
+        f"{emoji} <b>{sym}</b> — Entry changed\n"
+        f"Time: {ts} SGT\n"
+        f"Side: <b>{side}</b>\n"
+        f"Entry: <b>{entry:.2f}</b>\n"
+        f"TP: {tp:.2f} | SL: {sl:.2f}\n"
+        f"Price now: {price_now:.2f}"
+    )
+    ok = send_telegram(token, chat_id, txt)
+    if ok:
+        state[sym] = {"last_entry": float(entry)}
+        _save_tele_state(state)
 
 
 # ---------------------
@@ -113,35 +205,133 @@ TOL_PCT = float(lvl_cfg.get("cluster_tol_pct", 0.12))
 POOL_MAX = int(lvl_cfg.get("max_per_side", 12))
 
 
+# # ---------------------
+# # Sidebar (NO MARKDOWN)
+# # ---------------------
+# st.sidebar.text("Settings")
+
+# st.sidebar.text("Top coin")
+# symbol = st.sidebar.selectbox("", TOP_COINS, index=1, label_visibility="collapsed")
+
+# st.sidebar.text("Timeframe")
+# tf = st.sidebar.selectbox("", timeframes, index=timeframes.index("1h"), label_visibility="collapsed")
+
+# st.sidebar.text("Auto refresh")
+# auto_refresh = st.sidebar.checkbox("", value=True, label_visibility="collapsed")
+
+# st.sidebar.text("Refresh seconds")
+# refresh_sec = st.sidebar.number_input("", 10, 300, POLL_SEC, step=10, label_visibility="collapsed")
+
+# st.sidebar.text("Draw Top-N S/R per side")
+# draw_top = st.sidebar.number_input("", 1, 10, DRAW_TOP, step=1, label_visibility="collapsed")
+
+# st.sidebar.text("Lock zoom")
+# lock_zoom = st.sidebar.toggle("", value=True, label_visibility="collapsed")
+
+# if draw_top != DRAW_TOP:
+#     CFG["levels"]["draw_top"] = int(draw_top)
+#     with open("config.yaml","w") as f: yaml.safe_dump(CFG, f)
+#     DRAW_TOP = draw_top
+
+
+# # ---------------------
+# # Clear Prediction History via selectbox (SAFE FOR iOS)
+# # ---------------------
+# ios_safe_divider()
+# st.sidebar.text("Actions")
+
+# action = st.sidebar.selectbox(
+#     "",
+#     ["None", "Clear Prediction History"],
+#     label_visibility="collapsed"
+# )
+# if action == "Clear Prediction History":
+#     clear_pred_history()
+#     st.sidebar.text("✅ Cleared.")
+
+
+# # ---------------------
+# # Telegram Alerts (sidebar, iOS-safe)
+# # ---------------------
+# ios_safe_divider()
+# st.sidebar.text("Telegram Alerts")
+
+# _tele_cfg = load_telegram_cfg()
+# en_default = bool(_tele_cfg.get("enabled", False))
+# token_default = _tele_cfg.get("bot_token", "")
+# chat_default = _tele_cfg.get("chat_id", "")
+# watch_default = _tele_cfg.get("watch_symbols", ["ETHUSDT"])
+# minchg_default = float(_tele_cfg.get("min_change_pct", 0.02))  # %
+
+# enable_alerts = st.sidebar.checkbox(
+#     "",
+#     value=en_default,
+#     label_visibility="collapsed",
+#     key="telegram_enable_alerts"
+# )
+
+# st.sidebar.text("Bot Token")
+# bot_token_in = st.sidebar.text_input("", value=token_default, type="password", label_visibility="collapsed")
+
+# st.sidebar.text("Chat ID")
+# chat_id_in = st.sidebar.text_input("", value=chat_default, label_visibility="collapsed")
+
+# st.sidebar.text("Watch Symbols")
+# watch_syms = st.sidebar.multiselect("", TOP_COINS, default=watch_default, label_visibility="collapsed")
+
+# st.sidebar.text("Min Entry Change (%)")
+# min_change_pct = st.sidebar.number_input("", min_value=0.0, max_value=5.0, value=float(minchg_default), step=0.01, label_visibility="collapsed")
+
+# if st.sidebar.button("Save Telegram Settings", use_container_width=True):
+#     new_cfg = {
+#         "enabled": bool(enable_alerts),
+#         "bot_token": bot_token_in.strip(),
+#         "chat_id": chat_id_in.strip(),
+#         "watch_symbols": list(watch_syms),
+#         "min_change_pct": float(min_change_pct),
+#     }
+#     save_telegram_cfg(new_cfg)
+#     st.sidebar.text("✅ Saved.")
+
 # ---------------------
 # Sidebar (NO MARKDOWN)
 # ---------------------
 st.sidebar.text("Settings")
 
 st.sidebar.text("Top coin")
-symbol = st.sidebar.selectbox("", TOP_COINS, index=1, label_visibility="collapsed")
+symbol = st.sidebar.selectbox(
+    "", TOP_COINS, index=1, label_visibility="collapsed", key="sel_symbol"
+)
 
 st.sidebar.text("Timeframe")
-tf = st.sidebar.selectbox("", timeframes, index=timeframes.index("1h"), label_visibility="collapsed")
+tf = st.sidebar.selectbox(
+    "", timeframes, index=timeframes.index("1h"), label_visibility="collapsed", key="sel_tf"
+)
 
 st.sidebar.text("Auto refresh")
-auto_refresh = st.sidebar.checkbox("", value=True, label_visibility="collapsed")
+auto_refresh = st.sidebar.checkbox(
+    "", value=True, label_visibility="collapsed", key="auto_refresh"
+)
 
 st.sidebar.text("Refresh seconds")
-refresh_sec = st.sidebar.number_input("", 10, 300, POLL_SEC, step=10, label_visibility="collapsed")
+refresh_sec = st.sidebar.number_input(
+    "", 10, 300, POLL_SEC, step=10, label_visibility="collapsed", key="refresh_sec"
+)
 
 st.sidebar.text("Draw Top-N S/R per side")
-draw_top = st.sidebar.number_input("", 1, 10, DRAW_TOP, step=1, label_visibility="collapsed")
+draw_top = st.sidebar.number_input(
+    "", 1, 10, DRAW_TOP, step=1, label_visibility="collapsed", key="draw_top"
+)
 
 st.sidebar.text("Lock zoom")
-lock_zoom = st.sidebar.toggle("", value=True, label_visibility="collapsed")
-
+lock_zoom = st.sidebar.toggle(
+    "", value=True, label_visibility="collapsed", key="lock_zoom"
+)
 
 if draw_top != DRAW_TOP:
     CFG["levels"]["draw_top"] = int(draw_top)
     with open("config.yaml","w") as f: yaml.safe_dump(CFG, f)
     DRAW_TOP = draw_top
-
 
 # ---------------------
 # Clear Prediction History via selectbox (SAFE FOR iOS)
@@ -152,12 +342,70 @@ st.sidebar.text("Actions")
 action = st.sidebar.selectbox(
     "",
     ["None", "Clear Prediction History"],
-    label_visibility="collapsed"
+    label_visibility="collapsed",
+    key="actions_select"
 )
-
 if action == "Clear Prediction History":
     clear_pred_history()
     st.sidebar.text("✅ Cleared.")
+
+# ---------------------
+# Telegram Alerts (sidebar, iOS-safe)
+# ---------------------
+ios_safe_divider()
+st.sidebar.text("Telegram Alerts")
+
+_tele_cfg = load_telegram_cfg()
+en_default      = bool(_tele_cfg.get("enabled", False))
+token_default   = _tele_cfg.get("bot_token", "")
+chat_default    = _tele_cfg.get("chat_id", "")
+watch_default   = _tele_cfg.get("watch_symbols", ["ETHUSDT"])
+minchg_default  = float(_tele_cfg.get("min_change_pct", 0.02))  # %
+
+enable_alerts = st.sidebar.checkbox(
+    "", value=en_default, label_visibility="collapsed", key="telegram_enable_alerts"
+)
+
+st.sidebar.text("Bot Token")
+bot_token_in = st.sidebar.text_input(
+    "", value=token_default, type="password", label_visibility="collapsed", key="tg_token"
+)
+
+st.sidebar.text("Chat ID")
+chat_id_in = st.sidebar.text_input(
+    "", value=chat_default, label_visibility="collapsed", key="tg_chat_id"
+)
+
+st.sidebar.text("Watch Symbols")
+watch_syms = st.sidebar.multiselect(
+    "", TOP_COINS, default=watch_default, label_visibility="collapsed", key="tg_watch"
+)
+
+st.sidebar.text("Min Entry Change (%)")
+min_change_pct = st.sidebar.number_input(
+    "", min_value=0.0, max_value=5.0, value=float(minchg_default), step=0.01,
+    label_visibility="collapsed", key="tg_min_change"
+)
+
+col_tg1, col_tg2 = st.sidebar.columns(2)
+
+# Save settings
+if col_tg1.button("Save", use_container_width=True, key="tg_save"):
+    new_cfg = {
+        "enabled": bool(enable_alerts),
+        "bot_token": bot_token_in.strip(),
+        "chat_id": chat_id_in.strip(),
+        "watch_symbols": list(watch_syms),
+        "min_change_pct": float(min_change_pct),
+    }
+    save_telegram_cfg(new_cfg)
+    st.sidebar.text("✅ Saved.")
+
+# NEW: Send test message
+if col_tg2.button("Send test", use_container_width=True, key="tg_test"):
+    ts = datetime.now(SGT).strftime("%Y-%m-%d %H:%M:%S")
+    ok = send_telegram(bot_token_in.strip(), chat_id_in.strip(), f"✅ Test from app at {ts} SGT")
+    st.sidebar.text("✅ Sent." if ok else "❌ Failed (check token/chat id)")
 
 
 # ---------------------
@@ -170,15 +418,13 @@ engine = PyramidTimeframeStrategy(CFG)
 def fetch_df(symbol_key, timeframe_key):
     data = broker.fetch_ohlcv(symbol_key, timeframe=timeframe_key, limit=1000)
     df = pd.DataFrame(data, columns=["ts","open","high","low","close","volume"])
-    # >>> FIX 1: ép float để tránh outlier do string/NaN
+    # ép float để tránh outlier do string/NaN
     df[["open","high","low","close","volume"]] = df[["open","high","low","close","volume"]].astype(float)
     df["dt"] = pd.to_datetime(df["ts"], unit="ms")
     return df
 
-
 def _crosses(lo, hi, lv, tol):  # candle cross detection
     return (lo <= lv*(1+tol)) and (hi >= lv*(1-tol))
-
 
 def evaluate_all_predictions(pred_list):
     changed = False
@@ -227,7 +473,7 @@ def evaluate_all_predictions(pred_list):
 
 
 # ---------------------
-# RUN STRATEGY
+# RUN STRATEGY (current symbol)
 # ---------------------
 df = fetch_df(symbol, tf)
 df_h4 = fetch_df(symbol,"4h")
@@ -239,6 +485,27 @@ df["ema_l"] = ema(df["close"], int(CFG["strategy"]["ema_long"]))
 df["ema_sig"] = ema(df["close"], int(CFG["strategy"]["ema_signal"]))
 
 side, entry, sl, tp, viz_levels, meta = engine.propose_trade(df_h4, df_h1, df_15, CFG)
+
+# --- Telegram notify for current symbol
+tele_cfg_runtime = load_telegram_cfg()
+if tele_cfg_runtime.get("enabled"):
+    price_now_current = float(df["close"].iloc[-1])
+    notify_if_entry_changed(symbol, side, float(entry), float(tp), float(sl), price_now_current, tele_cfg_runtime)
+
+# --- Telegram notify for watch list (other symbols)
+watch_list = tele_cfg_runtime.get("watch_symbols", [])
+if tele_cfg_runtime.get("enabled") and watch_list:
+    for sym in [s for s in watch_list if s != symbol]:
+        try:
+            df_sym = fetch_df(sym, tf)
+            df_h4_s = fetch_df(sym, "4h")
+            df_h1_s = fetch_df(sym, "1h")
+            df_15_s = fetch_df(sym, "15m")
+            s_side, s_entry, s_sl, s_tp, _, _ = engine.propose_trade(df_h4_s, df_h1_s, df_15_s, CFG)
+            price_now_s = float(df_sym["close"].iloc[-1])
+            notify_if_entry_changed(sym, s_side, float(s_entry), float(s_tp), float(s_sl), price_now_s, tele_cfg_runtime)
+        except Exception:
+            pass
 
 
 # ---------------------
@@ -283,7 +550,6 @@ fig.add_scatter(x=df["dt"], y=df["ema_sig"], name="EMA signal")
 # Pred point (y1)
 fig.add_scatter(x=[df["dt"].iloc[-1]], y=[entry], mode="markers+text",
                 text=[f"{side} @ {entry:.2f}"], textposition="top center")
-
 # TP/SL (y1)
 fig.add_hline(y=tp, line_color="#16c784", line_dash="dot", annotation_text=f"TP {tp:.2f}")
 fig.add_hline(y=sl, line_color="#ea3943", line_dash="dot", annotation_text=f"SL {sl:.2f}")
@@ -317,7 +583,7 @@ if isinstance(viz_levels,dict):
     for px,sc in resistance:
         fig.add_hline(y=px, line_color="#ea3943", opacity=0.6, line_dash="dot", annotation_text=f"RES {sc:.0f}% @ {px:.2f}")
 
-# >>> FIX 2: đảm bảo bar luôn là y2, và y2 không match y1
+# Giữ y2 riêng, tránh match y1
 fig.update_traces(yaxis="y2", selector=dict(type="bar"))
 fig.update_layout(
     xaxis=dict(rangeslider=dict(visible=False)),
@@ -328,19 +594,14 @@ fig.update_layout(
         side="right",
         rangemode="tozero",
         showgrid=False,
-        matches=None  # khóa không “match” y1
+        matches=None
     ),
     height=740,
     uirevision="keep"
 )
 
-# >>> FIX 3: clamp y-axis theo percentile để né outlier
-# Dùng cả high/low/close để tính khoảng giá sạch
-px_all = np.concatenate([
-    df["low"].astype(float).values,
-    df["close"].astype(float).values,
-    df["high"].astype(float).values,
-])
+# clamp y theo percentile để né outlier
+px_all = np.concatenate([df["low"].values, df["close"].values, df["high"].values]).astype(float)
 lo = float(np.nanpercentile(px_all, 0.5))
 hi = float(np.nanpercentile(px_all, 99.5))
 if hi > lo:
@@ -365,35 +626,19 @@ else:
     st.plotly_chart(fig, use_container_width=True)
 
 
-# Sidebar list
-ios_safe_divider()
-st.sidebar.text("Supports/Resistances")
-# for px,sc in supports: st.sidebar.text(f"  SUP {sc:.0f}% @ {px:.2f}")
-# st.sidebar.text("Resistances")
-# for px,sc in resistance: st.sidebar.text(f"  RES {sc:.0f}% @ {px:.2f}")
+# Sidebar list (colored, iOS-safe)
 with st.sidebar:
     ios_safe_divider()
     st.text("Supports / Resistances")
 
-    # ---- render supports (GREEN) ----
     for px, sc in supports:
         components.html(
-            f"""
-            <div style="font-size:14px; color:#16c784; font-weight:500;">
-                SUP {sc:.0f}% @ {px:.2f}
-            </div>
-            """,
+            f"""<div style="font-size:14px; color:#16c784; font-weight:500;">SUP {sc:.0f}% @ {px:.2f}</div>""",
             height=22, scrolling=False
         )
-
-    # ---- render resistances (RED) ----
     for px, sc in resistance:
         components.html(
-            f"""
-            <div style="font-size:14px; color:#ea3943; font-weight:500;">
-                RES {sc:.0f}% @ {px:.2f}
-            </div>
-            """,
+            f"""<div style="font-size:14px; color:#ea3943; font-weight:500;">RES {sc:.0f}% @ {px:.2f}</div>""",
             height=22, scrolling=False
         )
 
@@ -402,10 +647,8 @@ st.sidebar.text("Prediction History")
 hist_df = pd.DataFrame(st.session_state.pred_history)
 st.sidebar.dataframe(hist_df.tail(50), use_container_width=True)
 
-
 # evaluate predictions
 evaluate_all_predictions(st.session_state.pred_history)
-
 
 if auto_refresh:
     import time
