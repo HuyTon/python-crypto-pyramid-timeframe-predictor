@@ -5,6 +5,9 @@ import streamlit as st
 import plotly.graph_objects as go
 from functools import lru_cache
 from datetime import datetime
+from zoneinfo import ZoneInfo
+from pathlib import Path
+import csv
 
 from broker import Broker
 from indicators import ema, rsi
@@ -16,6 +19,73 @@ try:
     PLOTLY_EVENTS_AVAILABLE = True
 except Exception:
     PLOTLY_EVENTS_AVAILABLE = False
+
+# --- Timezone & storage config for Prediction History ---
+SGT = ZoneInfo("Asia/Singapore")
+PRED_DIR = Path("data")
+PRED_DIR.mkdir(exist_ok=True)
+PRED_FILE = PRED_DIR / "prediction_history.csv"
+
+def _pred_to_row(rec: dict) -> list:
+    return [
+        rec.get("timestamp",""),
+        rec.get("symbol",""),
+        rec.get("timeframe",""),
+        rec.get("side",""),
+        rec.get("entry",""),
+        rec.get("tp",""),
+        rec.get("sl",""),
+        rec.get("actual_price",""),
+        rec.get("outcome",""),
+    ]
+
+def _row_to_pred(row: list) -> dict:
+    return {
+        "timestamp": row[0],
+        "symbol": row[1],
+        "timeframe": row[2],
+        "side": row[3],
+        "entry": float(row[4]) if row[4] != "" else "",
+        "tp": float(row[5]) if row[5] != "" else "",
+        "sl": float(row[6]) if row[6] != "" else "",
+        "actual_price": row[7],
+        "outcome": row[8],
+    }
+
+def load_pred_history() -> list:
+    if not PRED_FILE.exists():
+        return []
+    out = []
+    with PRED_FILE.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+        if not rows:
+            return []
+        start_idx = 1 if rows and rows[0] and rows[0][0].lower() == "timestamp" else 0
+        for r in rows[start_idx:]:
+            if not r: 
+                continue
+            try:
+                out.append(_row_to_pred(r))
+            except Exception:
+                pass
+    return out
+
+def save_pred_history(preds: list):
+    header = ["timestamp","symbol","timeframe","side","entry","tp","sl","actual_price","outcome"]
+    with PRED_FILE.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        for rec in preds:
+            writer.writerow(_pred_to_row(rec))
+
+def clear_pred_history():
+    try:
+        if PRED_FILE.exists():
+            PRED_FILE.unlink()
+    except Exception:
+        pass
+    st.session_state.pred_history = []
 
 st.set_page_config(page_title="Crypto Futures Dashboard", layout="wide")
 
@@ -43,6 +113,12 @@ auto_refresh = st.sidebar.checkbox("Auto refresh", value=True)
 refresh_sec = st.sidebar.number_input("Refresh seconds", min_value=10, max_value=300, value=POLL_SEC, step=10)
 draw_top = st.sidebar.number_input("Draw Top-N levels per side", min_value=1, max_value=10, value=DRAW_TOP, step=1)
 lock_zoom = st.sidebar.toggle("🔒 Lock zoom when you adjust", value=True)
+
+# --- Clear history button ---
+st.sidebar.markdown("---")
+if st.sidebar.button("🧹 Clear Prediction History", use_container_width=True):
+    clear_pred_history()
+    st.success("Cleared prediction history.")
 
 if draw_top != DRAW_TOP:
     CFG["levels"]["draw_top"] = int(draw_top)
@@ -126,8 +202,13 @@ df["ema_sig"] = ema(df["close"], int(CFG["strategy"]["ema_signal"]))
 
 side, entry, sl, tp, viz_levels, meta = engine.propose_trade(df_h4, df_h1, df_15, CFG)
 
-if "pred_history" not in st.session_state: st.session_state.pred_history = []
-_ts = datetime.now().strftime("%Y%m%d %H:%M:%S")
+# --- Load existing history (persisted) ---
+if "pred_history" not in st.session_state:
+    st.session_state.pred_history = load_pred_history()
+
+# --- Timestamp in Singapore timezone ---
+_ts = datetime.now(SGT).strftime("%Y%m%d %H:%M:%S")
+
 def _same_pred(last, symbol, tf, side, entry, sl, tp):
     try:
         return (last.get("symbol")==symbol and last.get("timeframe")==tf and last.get("side")==side and
@@ -136,15 +217,28 @@ def _same_pred(last, symbol, tf, side, entry, sl, tp):
                 abs(float(last.get("tp",0.0))-float(tp))<1e-9)
     except Exception: return False
 
+# --- Append or just update timestamp, then persist to file ---
 if st.session_state.pred_history:
     last = st.session_state.pred_history[-1]
     if _same_pred(last, symbol, tf, side, float(entry), float(sl), float(tp)):
         last["timestamp"] = _ts
     else:
-        st.session_state.pred_history.append({"timestamp":_ts,"symbol":symbol,"side":side,"entry":float(entry),"sl":float(sl),"tp":float(tp),"timeframe":tf,"actual_price":"","outcome":""})
+        st.session_state.pred_history.append({
+            "timestamp":_ts,"symbol":symbol,"side":side,
+            "entry":float(entry),"sl":float(sl),"tp":float(tp),
+            "timeframe":tf,"actual_price":"","outcome":""
+        })
 else:
-    st.session_state.pred_history.append({"timestamp":_ts,"symbol":symbol,"side":side,"entry":float(entry),"sl":float(sl),"tp":float(tp),"timeframe":tf,"actual_price":"","outcome":""})
+    st.session_state.pred_history.append({
+        "timestamp":_ts,"symbol":symbol,"side":side,
+        "entry":float(entry),"sl":float(sl),"tp":float(tp),
+        "timeframe":tf,"actual_price":"","outcome":""
+    })
 
+# Persist current (possibly truncated by your UI preference below)
+save_pred_history(st.session_state.pred_history)
+
+# Keep only last N in session (file already saved)
 st.session_state.pred_history = st.session_state.pred_history[-int(CFG.get("ui",{}).get("max_predictions",50)):]
 
 def cluster_levels(levels, tol_pct=0.12):
