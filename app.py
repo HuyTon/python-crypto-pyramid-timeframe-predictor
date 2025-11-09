@@ -106,7 +106,8 @@ WIN_PCT = float(levels_cfg.get("window_pct", 8))/100.0
 TOL_PCT = float(levels_cfg.get("cluster_tol_pct", 0.12))
 POOL_MAX = int(levels_cfg.get("max_per_side", 12))
 
-st.sidebar.title("Settings")
+# ----- iOS-safe sidebar (no Markdown renderers) -----
+st.sidebar.text("Settings")
 symbol = st.sidebar.selectbox("Top coin", TOP_COINS, index=TOP_COINS.index(CFG.get("default_symbol","ETHUSDT")) if CFG.get("default_symbol","ETHUSDT") in TOP_COINS else 1)
 tf = st.sidebar.selectbox("Timeframe", timeframes, index=timeframes.index("1h"))
 auto_refresh = st.sidebar.checkbox("Auto refresh", value=True)
@@ -114,11 +115,10 @@ refresh_sec = st.sidebar.number_input("Refresh seconds", min_value=10, max_value
 draw_top = st.sidebar.number_input("Draw Top-N levels per side", min_value=1, max_value=10, value=DRAW_TOP, step=1)
 lock_zoom = st.sidebar.toggle("🔒 Lock zoom when you adjust", value=True)
 
-# --- Clear history button (không dùng markdown) ---
 st.sidebar.divider()
 if st.sidebar.button("🧹 Clear Prediction History", use_container_width=True):
     clear_pred_history()
-    st.success("Cleared prediction history.")
+    st.sidebar.text("Cleared prediction history.")
 
 if draw_top != DRAW_TOP:
     CFG["levels"]["draw_top"] = int(draw_top)
@@ -280,8 +280,6 @@ if isinstance(viz_levels, dict):
     sups_pool = sorted(sup_c, key=lambda x: (-x[1], abs(x[0]-price_now)))[:POOL_MAX]
     ress_pool = sorted(res_c, key=lambda x: (-x[1], abs(x[0]-price_now)))[:POOL_MAX]
     sups = sups_pool[:DRAW_TOP]; ress = ress_pool[:DRAW_TOP]
-    # Chuyển qua text/plain để tránh Markdown render trên iOS
-    # (Plotly annotations vẫn dùng bình thường)
     for i,(px, score) in enumerate(sups):
         fig.add_hline(y=px, line_color="#16c784", opacity=0.6, line_dash="dot",
                       annotation_text=f"SUP {score:.0f}% @ {px:.2f}", annotation_position="top left" if i%2==0 else "bottom left")
@@ -304,6 +302,7 @@ xr = st.session_state.get("x_range"); yr = st.session_state.get("y_range")
 if xr: fig.update_xaxes(range=xr)
 if yr: fig.update_yaxes(range=yr)
 
+# Capture zoom events (if available) without relying on markdown components
 if PLOTLY_EVENTS_AVAILABLE and lock_zoom:
     try:
         ev = plotly_events(fig, events=["plotly_relayout"], key="chart_ev", override_width="100%", override_height=720)
@@ -325,19 +324,19 @@ else:
 
 # ----- Sidebar blocks WITHOUT Markdown to avoid iOS regex crash -----
 st.sidebar.divider()
-st.sidebar.subheader("Top Levels (drawn)")
+st.sidebar.text("Top Levels (drawn)")
 if sups or ress:
     if sups:
-        st.sidebar.subheader("Supports")
+        st.sidebar.text("Supports")
         for px, sc in sups:
             st.sidebar.text(f"- {px:.2f}  · {sc:.0f}%")
     if ress:
-        st.sidebar.subheader("Resistances")
+        st.sidebar.text("Resistances")
         for px, sc in ress:
             st.sidebar.text(f"- {px:.2f}  · {sc:.0f}%")
 
 st.sidebar.divider()
-st.sidebar.subheader("Prediction History")
+st.sidebar.text("Prediction History")
 hist_df = pd.DataFrame(st.session_state.pred_history)
 st.sidebar.dataframe(hist_df.tail(50), use_container_width=True)
 
