@@ -367,9 +367,35 @@ else:
 
 # Sidebar list
 ios_safe_divider()
-st.sidebar.text("Supports / Resistances")
-for px,sc in supports: st.sidebar.text(f"SUP {sc:.0f}% @ {px:.2f}")
-for px,sc in resistance: st.sidebar.text(f"RES {sc:.0f}% @ {px:.2f}")
+st.sidebar.text("Supports/Resistances")
+# for px,sc in supports: st.sidebar.text(f"  SUP {sc:.0f}% @ {px:.2f}")
+# st.sidebar.text("Resistances")
+# for px,sc in resistance: st.sidebar.text(f"  RES {sc:.0f}% @ {px:.2f}")
+with st.sidebar:
+    ios_safe_divider()
+    st.text("Supports / Resistances")
+
+    # ---- render supports (GREEN) ----
+    for px, sc in supports:
+        components.html(
+            f"""
+            <div style="font-size:14px; color:#16c784; font-weight:500;">
+                SUP {sc:.0f}% @ {px:.2f}
+            </div>
+            """,
+            height=22, scrolling=False
+        )
+
+    # ---- render resistances (RED) ----
+    for px, sc in resistance:
+        components.html(
+            f"""
+            <div style="font-size:14px; color:#ea3943; font-weight:500;">
+                RES {sc:.0f}% @ {px:.2f}
+            </div>
+            """,
+            height=22, scrolling=False
+        )
 
 ios_safe_divider()
 st.sidebar.text("Prediction History")
