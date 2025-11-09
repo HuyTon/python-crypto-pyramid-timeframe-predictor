@@ -22,13 +22,11 @@ try:
 except Exception:
     PLOTLY_EVENTS_AVAILABLE = False
 
-
 # ---------------------
 # iOS SAFE divider
 # ---------------------
 def ios_safe_divider():
     components.html('<div style="border-top:1px solid #e5e7eb;margin:10px 0;"></div>', height=12)
-
 
 # ---------------------
 # Prediction history local file
@@ -93,7 +91,6 @@ def clear_pred_history():
         PRED_FILE.unlink()
     st.session_state.pred_history = []
 
-
 # ---------------------
 # Telegram helpers
 # ---------------------
@@ -140,12 +137,26 @@ def send_telegram(bot_token: str, chat_id: str, text: str) -> bool:
     except Exception:
         return False
 
+def get_telegram_token():
+    try:
+        return st.secrets["TELEGRAM_BOT_TOKEN"]
+    except Exception:
+        pass
+    return os.environ.get("TELEGRAM_BOT_TOKEN")
+
+def get_telegram_chat_id():
+    try:
+        return st.secrets["TELEGRAM_CHAT_ID"]
+    except Exception:
+        pass
+    return os.environ.get("TELEGRAM_CHAT_ID")
+
 def notify_if_entry_changed(sym: str, side: str, entry: float, tp: float, sl: float,
                             price_now: float, tele_cfg: dict):
     if not tele_cfg.get("enabled"):
         return
-    token = tele_cfg.get("bot_token", "")
-    chat_id = tele_cfg.get("chat_id", "")
+    token = get_telegram_token()
+    chat_id = get_telegram_chat_id()
     if not token or not chat_id:
         return
 
@@ -181,7 +192,6 @@ def notify_if_entry_changed(sym: str, side: str, entry: float, tp: float, sl: fl
         state[sym] = {"last_entry": float(entry)}
         _save_tele_state(state)
 
-
 # ---------------------
 # STREAMLIT UI
 # ---------------------
@@ -203,95 +213,6 @@ DRAW_TOP = int(lvl_cfg.get("draw_top", 3))
 WIN_PCT = float(lvl_cfg.get("window_pct", 8)) / 100
 TOL_PCT = float(lvl_cfg.get("cluster_tol_pct", 0.12))
 POOL_MAX = int(lvl_cfg.get("max_per_side", 12))
-
-
-# # ---------------------
-# # Sidebar (NO MARKDOWN)
-# # ---------------------
-# st.sidebar.text("Settings")
-
-# st.sidebar.text("Top coin")
-# symbol = st.sidebar.selectbox("", TOP_COINS, index=1, label_visibility="collapsed")
-
-# st.sidebar.text("Timeframe")
-# tf = st.sidebar.selectbox("", timeframes, index=timeframes.index("1h"), label_visibility="collapsed")
-
-# st.sidebar.text("Auto refresh")
-# auto_refresh = st.sidebar.checkbox("", value=True, label_visibility="collapsed")
-
-# st.sidebar.text("Refresh seconds")
-# refresh_sec = st.sidebar.number_input("", 10, 300, POLL_SEC, step=10, label_visibility="collapsed")
-
-# st.sidebar.text("Draw Top-N S/R per side")
-# draw_top = st.sidebar.number_input("", 1, 10, DRAW_TOP, step=1, label_visibility="collapsed")
-
-# st.sidebar.text("Lock zoom")
-# lock_zoom = st.sidebar.toggle("", value=True, label_visibility="collapsed")
-
-# if draw_top != DRAW_TOP:
-#     CFG["levels"]["draw_top"] = int(draw_top)
-#     with open("config.yaml","w") as f: yaml.safe_dump(CFG, f)
-#     DRAW_TOP = draw_top
-
-
-# # ---------------------
-# # Clear Prediction History via selectbox (SAFE FOR iOS)
-# # ---------------------
-# ios_safe_divider()
-# st.sidebar.text("Actions")
-
-# action = st.sidebar.selectbox(
-#     "",
-#     ["None", "Clear Prediction History"],
-#     label_visibility="collapsed"
-# )
-# if action == "Clear Prediction History":
-#     clear_pred_history()
-#     st.sidebar.text("✅ Cleared.")
-
-
-# # ---------------------
-# # Telegram Alerts (sidebar, iOS-safe)
-# # ---------------------
-# ios_safe_divider()
-# st.sidebar.text("Telegram Alerts")
-
-# _tele_cfg = load_telegram_cfg()
-# en_default = bool(_tele_cfg.get("enabled", False))
-# token_default = _tele_cfg.get("bot_token", "")
-# chat_default = _tele_cfg.get("chat_id", "")
-# watch_default = _tele_cfg.get("watch_symbols", ["ETHUSDT"])
-# minchg_default = float(_tele_cfg.get("min_change_pct", 0.02))  # %
-
-# enable_alerts = st.sidebar.checkbox(
-#     "",
-#     value=en_default,
-#     label_visibility="collapsed",
-#     key="telegram_enable_alerts"
-# )
-
-# st.sidebar.text("Bot Token")
-# bot_token_in = st.sidebar.text_input("", value=token_default, type="password", label_visibility="collapsed")
-
-# st.sidebar.text("Chat ID")
-# chat_id_in = st.sidebar.text_input("", value=chat_default, label_visibility="collapsed")
-
-# st.sidebar.text("Watch Symbols")
-# watch_syms = st.sidebar.multiselect("", TOP_COINS, default=watch_default, label_visibility="collapsed")
-
-# st.sidebar.text("Min Entry Change (%)")
-# min_change_pct = st.sidebar.number_input("", min_value=0.0, max_value=5.0, value=float(minchg_default), step=0.01, label_visibility="collapsed")
-
-# if st.sidebar.button("Save Telegram Settings", use_container_width=True):
-#     new_cfg = {
-#         "enabled": bool(enable_alerts),
-#         "bot_token": bot_token_in.strip(),
-#         "chat_id": chat_id_in.strip(),
-#         "watch_symbols": list(watch_syms),
-#         "min_change_pct": float(min_change_pct),
-#     }
-#     save_telegram_cfg(new_cfg)
-#     st.sidebar.text("✅ Saved.")
 
 # ---------------------
 # Sidebar (NO MARKDOWN)
@@ -334,31 +255,38 @@ if draw_top != DRAW_TOP:
     DRAW_TOP = draw_top
 
 # ---------------------
-# Clear Prediction History via selectbox (SAFE FOR iOS)
+# Actions (add 'Send test Telegram' here)
 # ---------------------
 ios_safe_divider()
 st.sidebar.text("Actions")
 
 action = st.sidebar.selectbox(
     "",
-    ["None", "Clear Prediction History"],
+    ["None", "Clear Prediction History", "Send test Telegram"],
     label_visibility="collapsed",
     key="actions_select"
 )
 if action == "Clear Prediction History":
     clear_pred_history()
     st.sidebar.text("✅ Cleared.")
+elif action == "Send test Telegram":
+    token = get_telegram_token()
+    chat_id = get_telegram_chat_id()
+    ts = datetime.now(SGT).strftime("%Y-%m-%d %H:%M:%S")
+    ok = send_telegram(token, chat_id, f"✅ Test from app at {ts} SGT")
+    st.sidebar.text("✅ Sent." if ok else "❌ Failed (check token/chat id)")
 
 # ---------------------
 # Telegram Alerts (sidebar, iOS-safe)
+# (No Save / No Send buttons anymore — using secrets + existing YAML for non-secret fields)
 # ---------------------
 ios_safe_divider()
 st.sidebar.text("Telegram Alerts")
 
 _tele_cfg = load_telegram_cfg()
 en_default      = bool(_tele_cfg.get("enabled", False))
-token_default   = _tele_cfg.get("bot_token", "")
-chat_default    = _tele_cfg.get("chat_id", "")
+token_default   = get_telegram_token()
+chat_default    = get_telegram_chat_id()
 watch_default   = _tele_cfg.get("watch_symbols", ["ETHUSDT"])
 minchg_default  = float(_tele_cfg.get("min_change_pct", 0.02))  # %
 
@@ -366,15 +294,17 @@ enable_alerts = st.sidebar.checkbox(
     "", value=en_default, label_visibility="collapsed", key="telegram_enable_alerts"
 )
 
-st.sidebar.text("Bot Token")
-bot_token_in = st.sidebar.text_input(
-    "", value=token_default, type="password", label_visibility="collapsed", key="tg_token"
-)
+# st.sidebar.text("Bot Token (from secrets)")
+# st.sidebar.text_input(
+#     "", value=token_default or "", type="password", label_visibility="collapsed", key="tg_token",
+#     disabled=True
+# )
 
-st.sidebar.text("Chat ID")
-chat_id_in = st.sidebar.text_input(
-    "", value=chat_default, label_visibility="collapsed", key="tg_chat_id"
-)
+# st.sidebar.text("Chat ID (from secrets)")
+# st.sidebar.text_input(
+#     "", value=chat_default or "", label_visibility="collapsed", key="tg_chat_id",
+#     disabled=True
+# )
 
 st.sidebar.text("Watch Symbols")
 watch_syms = st.sidebar.multiselect(
@@ -387,26 +317,14 @@ min_change_pct = st.sidebar.number_input(
     label_visibility="collapsed", key="tg_min_change"
 )
 
-col_tg1, col_tg2 = st.sidebar.columns(2)
-
-# Save settings
-if col_tg1.button("Save", use_container_width=True, key="tg_save"):
-    new_cfg = {
-        "enabled": bool(enable_alerts),
-        "bot_token": bot_token_in.strip(),
-        "chat_id": chat_id_in.strip(),
-        "watch_symbols": list(watch_syms),
-        "min_change_pct": float(min_change_pct),
-    }
-    save_telegram_cfg(new_cfg)
-    st.sidebar.text("✅ Saved.")
-
-# NEW: Send test message
-if col_tg2.button("Send test", use_container_width=True, key="tg_test"):
-    ts = datetime.now(SGT).strftime("%Y-%m-%d %H:%M:%S")
-    ok = send_telegram(bot_token_in.strip(), chat_id_in.strip(), f"✅ Test from app at {ts} SGT")
-    st.sidebar.text("✅ Sent." if ok else "❌ Failed (check token/chat id)")
-
+# Auto-persist non-secret prefs on change (enabled, watchlist, min_change)
+new_cfg = {
+    "enabled": bool(enable_alerts),
+    # bot_token/chat_id are not persisted (read from secrets)
+    "watch_symbols": list(watch_syms),
+    "min_change_pct": float(min_change_pct),
+}
+save_telegram_cfg(new_cfg)
 
 # ---------------------
 # DATA FETCH
@@ -471,7 +389,6 @@ def evaluate_all_predictions(pred_list):
             changed = True
     return changed
 
-
 # ---------------------
 # RUN STRATEGY (current symbol)
 # ---------------------
@@ -507,7 +424,6 @@ if tele_cfg_runtime.get("enabled") and watch_list:
         except Exception:
             pass
 
-
 # ---------------------
 # Prediction History (persisted + session)
 # ---------------------
@@ -533,7 +449,6 @@ else:
 
 save_pred_history(st.session_state.pred_history)
 st.session_state.pred_history = st.session_state.pred_history[-50:]
-
 
 # ---------------------
 # CHART
@@ -624,7 +539,6 @@ if PLOTLY_EVENTS_AVAILABLE and lock_zoom:
                 st.session_state["y_range"]=[e["yaxis.range[0]"],e["yaxis.range[1]"]]
 else:
     st.plotly_chart(fig, use_container_width=True)
-
 
 # Sidebar list (colored, iOS-safe)
 with st.sidebar:
