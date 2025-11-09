@@ -106,14 +106,46 @@ WIN_PCT = float(levels_cfg.get("window_pct", 8))/100.0
 TOL_PCT = float(levels_cfg.get("cluster_tol_pct", 0.12))
 POOL_MAX = int(levels_cfg.get("max_per_side", 12))
 
-# ----- iOS-safe sidebar (no Markdown renderers) -----
+# ----- iOS-safe sidebar (NO Markdown-based labels) -----
 st.sidebar.text("Settings")
-symbol = st.sidebar.selectbox("Top coin", TOP_COINS, index=TOP_COINS.index(CFG.get("default_symbol","ETHUSDT")) if CFG.get("default_symbol","ETHUSDT") in TOP_COINS else 1)
-tf = st.sidebar.selectbox("Timeframe", timeframes, index=timeframes.index("1h"))
-auto_refresh = st.sidebar.checkbox("Auto refresh", value=True)
-refresh_sec = st.sidebar.number_input("Refresh seconds", min_value=10, max_value=300, value=POLL_SEC, step=10)
-draw_top = st.sidebar.number_input("Draw Top-N levels per side", min_value=1, max_value=10, value=DRAW_TOP, step=1)
-lock_zoom = st.sidebar.toggle("🔒 Lock zoom when you adjust", value=True)
+st.sidebar.text("Top coin")
+symbol = st.sidebar.selectbox(
+    "",
+    TOP_COINS,
+    index=TOP_COINS.index(CFG.get("default_symbol","ETHUSDT")) if CFG.get("default_symbol","ETHUSDT") in TOP_COINS else 1,
+    label_visibility="collapsed",
+)
+st.sidebar.text("Timeframe")
+tf = st.sidebar.selectbox(
+    "",
+    timeframes,
+    index=timeframes.index("1h"),
+    label_visibility="collapsed",
+)
+st.sidebar.text("Auto refresh")
+auto_refresh = st.sidebar.checkbox(
+    "",
+    value=True,
+    label_visibility="collapsed",
+)
+st.sidebar.text("Refresh seconds")
+refresh_sec = st.sidebar.number_input(
+    "",
+    min_value=10, max_value=300, value=POLL_SEC, step=10,
+    label_visibility="collapsed",
+)
+st.sidebar.text("Draw Top-N levels per side")
+draw_top = st.sidebar.number_input(
+    "",
+    min_value=1, max_value=10, value=DRAW_TOP, step=1,
+    label_visibility="collapsed",
+)
+st.sidebar.text("🔒 Lock zoom when you adjust")
+lock_zoom = st.sidebar.toggle(
+    "",
+    value=True,
+    label_visibility="collapsed",
+)
 
 st.sidebar.divider()
 if st.sidebar.button("🧹 Clear Prediction History", use_container_width=True):
