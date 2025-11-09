@@ -540,21 +540,37 @@ if PLOTLY_EVENTS_AVAILABLE and lock_zoom:
 else:
     st.plotly_chart(fig, use_container_width=True)
 
-# Sidebar list (colored, iOS-safe)
-with st.sidebar:
-    ios_safe_divider()
-    st.text("Supports / Resistances")
+# ---- render supports + resistances on the SAME line ----
+max_len = max(len(supports), len(resistance))
+components.html('<div style="border-top:2px solid #000000;"></div>', height=16)
+components.html('<div style="margin:5px 0;font-size:16px;font-family:Arial, sans-serif;">Supports / Resistances</div>', height=25)
 
-    for px, sc in supports:
-        components.html(
-            f"""<div style="font-size:14px; color:#16c784; font-weight:500;">SUP {sc:.0f}% @ {px:.2f}</div>""",
-            height=22, scrolling=False
-        )
-    for px, sc in resistance:
-        components.html(
-            f"""<div style="font-size:14px; color:#ea3943; font-weight:500;">RES {sc:.0f}% @ {px:.2f}</div>""",
-            height=22, scrolling=False
-        )
+for i in range(max_len):
+    sup_txt = ""
+    res_txt = ""
+
+    if i < len(supports):
+        px, sc = supports[i]
+        sup_txt = f'<span style="color:#16c784;font-family:Arial, sans-serif;font-weight:500;">SUP {sc:.0f}% @ {px:.2f}</span>'
+
+    if i < len(resistance):
+        px, sc = resistance[i]
+        res_txt = f'<span style="color:#ea3943;font-family:Arial, sans-serif;font-weight:500;">RES {sc:.0f}% @ {px:.2f}</span>'
+
+    components.html(
+        f"""
+        <div style="
+            display:flex;            
+            font-size:14px;
+            width:100%;
+        ">
+            <div>{sup_txt}</div>
+            <div style="margin-left:10px;">{res_txt}</div>
+        </div>
+        """,
+        height=24,
+        scrolling=False
+    )
 
 ios_safe_divider()
 st.sidebar.text("Prediction History")
