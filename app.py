@@ -170,6 +170,8 @@ engine = PyramidTimeframeStrategy(CFG)
 def fetch_df(symbol_key, timeframe_key):
     data = broker.fetch_ohlcv(symbol_key, timeframe=timeframe_key, limit=1000)
     df = pd.DataFrame(data, columns=["ts","open","high","low","close","volume"])
+    # >>> FIX 1: ép float để tránh outlier do string/NaN
+    df[["open","high","low","close","volume"]] = df[["open","high","low","close","volume"]].astype(float)
     df["dt"] = pd.to_datetime(df["ts"], unit="ms")
     return df
 
@@ -183,7 +185,7 @@ def evaluate_all_predictions(pred_list):
     for rec in list(pred_list):
         if rec.get("outcome"): continue
 
-        sym, tf = rec["symbol"], rec["timeframe"]
+        sym, tf_ = rec["symbol"], rec["timeframe"]
         side = rec["side"]
         entry, tp, sl = float(rec["entry"]), float(rec["tp"]), float(rec["sl"])
         ts = rec["timestamp"]
@@ -193,7 +195,7 @@ def evaluate_all_predictions(pred_list):
         except:
             continue
 
-        df_tf = fetch_df(sym, tf)
+        df_tf = fetch_df(sym, tf_)
         df_after = df_tf[df_tf["ts"] >= ts_ms]
         if df_after.empty: continue
 
@@ -270,18 +272,23 @@ st.session_state.pred_history = st.session_state.pred_history[-50:]
 # CHART
 # ---------------------
 fig = go.Figure()
+# Candles (y1)
 fig.add_candlestick(x=df["dt"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price")
+# Volume (y2)
 fig.add_bar(x=df["dt"], y=df["volume"], name="Volume", opacity=0.25, yaxis="y2")
+# EMAs (y1)
 fig.add_scatter(x=df["dt"], y=df["ema_s"], name="EMA short")
 fig.add_scatter(x=df["dt"], y=df["ema_l"], name="EMA long")
 fig.add_scatter(x=df["dt"], y=df["ema_sig"], name="EMA signal")
+# Pred point (y1)
 fig.add_scatter(x=[df["dt"].iloc[-1]], y=[entry], mode="markers+text",
                 text=[f"{side} @ {entry:.2f}"], textposition="top center")
 
+# TP/SL (y1)
 fig.add_hline(y=tp, line_color="#16c784", line_dash="dot", annotation_text=f"TP {tp:.2f}")
 fig.add_hline(y=sl, line_color="#ea3943", line_dash="dot", annotation_text=f"SL {sl:.2f}")
 
-price_now = df["close"].iloc[-1]
+price_now = float(df["close"].iloc[-1])
 
 def cluster(levels, tol_pct):
     merged=[]
@@ -310,13 +317,35 @@ if isinstance(viz_levels,dict):
     for px,sc in resistance:
         fig.add_hline(y=px, line_color="#ea3943", opacity=0.6, line_dash="dot", annotation_text=f"RES {sc:.0f}% @ {px:.2f}")
 
+# >>> FIX 2: đảm bảo bar luôn là y2, và y2 không match y1
+fig.update_traces(yaxis="y2", selector=dict(type="bar"))
 fig.update_layout(
     xaxis=dict(rangeslider=dict(visible=False)),
-    yaxis=dict(title="Price"),
-    yaxis2=dict(title="Vol", overlaying="y", side="right", showgrid=False),
+    yaxis=dict(title="Price", rangemode="tozero"),
+    yaxis2=dict(
+        title="Vol",
+        overlaying="y",
+        side="right",
+        rangemode="tozero",
+        showgrid=False,
+        matches=None  # khóa không “match” y1
+    ),
     height=740,
     uirevision="keep"
 )
+
+# >>> FIX 3: clamp y-axis theo percentile để né outlier
+# Dùng cả high/low/close để tính khoảng giá sạch
+px_all = np.concatenate([
+    df["low"].astype(float).values,
+    df["close"].astype(float).values,
+    df["high"].astype(float).values,
+])
+lo = float(np.nanpercentile(px_all, 0.5))
+hi = float(np.nanpercentile(px_all, 99.5))
+if hi > lo:
+    pad = 0.02 * (hi - lo)
+    fig.update_yaxes(range=[lo - pad, hi + pad])
 
 # Zoom lock (session remembered)
 if "x_range" in st.session_state:
