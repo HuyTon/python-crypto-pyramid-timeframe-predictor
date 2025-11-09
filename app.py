@@ -63,7 +63,7 @@ def load_pred_history() -> list:
             return []
         start_idx = 1 if rows and rows[0] and rows[0][0].lower() == "timestamp" else 0
         for r in rows[start_idx:]:
-            if not r: 
+            if not r:
                 continue
             try:
                 out.append(_row_to_pred(r))
@@ -114,8 +114,8 @@ refresh_sec = st.sidebar.number_input("Refresh seconds", min_value=10, max_value
 draw_top = st.sidebar.number_input("Draw Top-N levels per side", min_value=1, max_value=10, value=DRAW_TOP, step=1)
 lock_zoom = st.sidebar.toggle("🔒 Lock zoom when you adjust", value=True)
 
-# --- Clear history button ---
-st.sidebar.markdown("---")
+# --- Clear history button (không dùng markdown) ---
+st.sidebar.divider()
 if st.sidebar.button("🧹 Clear Prediction History", use_container_width=True):
     clear_pred_history()
     st.success("Cleared prediction history.")
@@ -280,6 +280,8 @@ if isinstance(viz_levels, dict):
     sups_pool = sorted(sup_c, key=lambda x: (-x[1], abs(x[0]-price_now)))[:POOL_MAX]
     ress_pool = sorted(res_c, key=lambda x: (-x[1], abs(x[0]-price_now)))[:POOL_MAX]
     sups = sups_pool[:DRAW_TOP]; ress = ress_pool[:DRAW_TOP]
+    # Chuyển qua text/plain để tránh Markdown render trên iOS
+    # (Plotly annotations vẫn dùng bình thường)
     for i,(px, score) in enumerate(sups):
         fig.add_hline(y=px, line_color="#16c784", opacity=0.6, line_dash="dot",
                       annotation_text=f"SUP {score:.0f}% @ {px:.2f}", annotation_position="top left" if i%2==0 else "bottom left")
@@ -321,15 +323,20 @@ if PLOTLY_EVENTS_AVAILABLE and lock_zoom:
 else:
     st.plotly_chart(fig, use_container_width=True)
 
-st.sidebar.markdown("---")
+# ----- Sidebar blocks WITHOUT Markdown to avoid iOS regex crash -----
+st.sidebar.divider()
 st.sidebar.subheader("Top Levels (drawn)")
 if sups or ress:
-    st.sidebar.write("**Supports**")
-    for px, sc in sups: st.sidebar.write(f"- {px:.2f}  · **{sc:.0f}%**")
-    st.sidebar.write("**Resistances**")
-    for px, sc in ress: st.sidebar.write(f"- {px:.2f}  · **{sc:.0f}%**")
+    if sups:
+        st.sidebar.subheader("Supports")
+        for px, sc in sups:
+            st.sidebar.text(f"- {px:.2f}  · {sc:.0f}%")
+    if ress:
+        st.sidebar.subheader("Resistances")
+        for px, sc in ress:
+            st.sidebar.text(f"- {px:.2f}  · {sc:.0f}%")
 
-st.sidebar.markdown("---")
+st.sidebar.divider()
 st.sidebar.subheader("Prediction History")
 hist_df = pd.DataFrame(st.session_state.pred_history)
 st.sidebar.dataframe(hist_df.tail(50), use_container_width=True)

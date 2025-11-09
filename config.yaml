@@ -12,7 +12,7 @@ strategy:
   ema_signal: 100
   rsi_period: 14
   take_profit_pct: 1.2
-  stop_loss_pct: 1.8
+  stop_loss_pct: 0.8
   vol_lookback: 20
 ui:
   theme: dark
