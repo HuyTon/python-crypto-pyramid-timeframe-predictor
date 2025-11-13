@@ -268,15 +268,10 @@ lock_zoom = st.sidebar.toggle(
     "", value=True, label_visibility="collapsed", key="lock_zoom"
 )
 
-st.sidebar.text("Chart Display")
-chart_menu = st.sidebar.radio(
-    "",
-    options=["Hide Chart", "Show Chart"],
-    index=0,
-    label_visibility="collapsed",
-    key="chart_visibility"
+st.sidebar.text("Show chart")
+chart_visible = st.sidebar.checkbox(
+    "", value=False, label_visibility="collapsed", key="chart_visibility"
 )
-chart_visible = chart_menu == "Show Chart"
 
 if draw_top != DRAW_TOP:
     CFG["levels"]["draw_top"] = int(draw_top)
