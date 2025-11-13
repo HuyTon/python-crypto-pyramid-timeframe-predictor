@@ -554,23 +554,11 @@ save_pred_history(st.session_state.pred_history)
 st.session_state.pred_history = st.session_state.pred_history[-50:]
 
 # ---------------------
-# CHART
+# CHART + LEVEL SUMMARY
 # ---------------------
+price_for_levels = float(df["close"].iloc[-1])
 
-fig = go.Figure()
-fig.add_candlestick(x=df["dt"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price")
-fig.add_bar(x=df["dt"], y=df["volume"], name="Volume", opacity=0.25, yaxis="y2")
-fig.add_scatter(x=df["dt"], y=df["ema_s"], name="EMA short")
-fig.add_scatter(x=df["dt"], y=df["ema_l"], name="EMA long")
-fig.add_scatter(x=df["dt"], y=df["ema_sig"], name="EMA signal")
-fig.add_scatter(x=[df["dt"].iloc[-1]], y=[entry], mode="markers+text",
-                text=[f"{side} @ {entry:.2f}"], textposition="top center")
-fig.add_hline(y=tp, line_color="#16c784", line_dash="dot", annotation_text=f"TP {tp:.2f}")
-fig.add_hline(y=sl, line_color="#ea3943", line_dash="dot", annotation_text=f"SL {sl:.2f}")
-
-price_now = float(df["close"].iloc[-1])
-
-def cluster(levels, tol_pct):
+def _cluster(levels, tol_pct):
     merged=[]
     for px,sc in sorted(levels, key=lambda x:x[0]):
         if not merged:
@@ -584,48 +572,60 @@ def cluster(levels, tol_pct):
             merged.append([px,sc,1])
     return [(px,sc) for px,sc,_ in merged]
 
-supports = resistance = []
+supports = []
+resistance = []
 if isinstance(viz_levels,dict):
-    sup_raw = [(p,s) for p,s in viz_levels["supports"] if abs(p-price_now)/price_now<=WIN_PCT]
-    res_raw = [(p,s) for p,s in viz_levels["resists"] if abs(p-price_now)/price_now<=WIN_PCT]
-    sups = sorted(cluster(sup_raw, TOL_PCT), key=lambda x: (-x[1], abs(x[0]-price_now)))[:POOL_MAX]
-    ress = sorted(cluster(res_raw, TOL_PCT), key=lambda x: (-x[1], abs(x[0]-price_now)))[:POOL_MAX]
-    supports=sups[:DRAW_TOP]; resistance=ress[:DRAW_TOP]
+    sup_raw = [(p,s) for p,s in viz_levels["supports"] if abs(p-price_for_levels)/price_for_levels<=WIN_PCT]
+    res_raw = [(p,s) for p,s in viz_levels["resists"] if abs(p-price_for_levels)/price_for_levels<=WIN_PCT]
+    sups = sorted(_cluster(sup_raw, TOL_PCT), key=lambda x: (-x[1], abs(x[0]-price_for_levels)))[:POOL_MAX]
+    ress = sorted(_cluster(res_raw, TOL_PCT), key=lambda x: (-x[1], abs(x[0]-price_for_levels)))[:POOL_MAX]
+    supports = sups[:DRAW_TOP]
+    resistance = ress[:DRAW_TOP]
 
+if chart_visible:
+    fig = go.Figure()
+    fig.add_candlestick(x=df["dt"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price")
+    fig.add_bar(x=df["dt"], y=df["volume"], name="Volume", opacity=0.25, yaxis="y2")
+    fig.add_scatter(x=df["dt"], y=df["ema_s"], name="EMA short")
+    fig.add_scatter(x=df["dt"], y=df["ema_l"], name="EMA long")
+    fig.add_scatter(x=df["dt"], y=df["ema_sig"], name="EMA signal")
+    fig.add_scatter(x=[df["dt"].iloc[-1]], y=[entry], mode="markers+text",
+                    text=[f"{side} @ {entry:.2f}"], textposition="top center")
+    fig.add_hline(y=tp, line_color="#16c784", line_dash="dot", annotation_text=f"TP {tp:.2f}")
+    fig.add_hline(y=sl, line_color="#ea3943", line_dash="dot", annotation_text=f"SL {sl:.2f}")
     for px,sc in supports:
         fig.add_hline(y=px, line_color="#16c784", opacity=0.6, line_dash="dot", annotation_text=f"SUP {sc:.0f}% @ {px:.2f}")
     for px,sc in resistance:
         fig.add_hline(y=px, line_color="#ea3943", opacity=0.6, line_dash="dot", annotation_text=f"RES {sc:.0f}% @ {px:.2f}")
 
-fig.update_traces(yaxis="y2", selector=dict(type="bar"))
-fig.update_layout(
-    xaxis=dict(rangeslider=dict(visible=False)),
-    yaxis=dict(title="Price", rangemode="tozero"),
-    yaxis2=dict(
-        title="Vol",
-        overlaying="y",
-        side="right",
-        rangemode="tozero",
-        showgrid=False,
-        matches=None
-    ),
-    height=740,
-    uirevision="keep"
-)
+    fig.update_traces(yaxis="y2", selector=dict(type="bar"))
+    fig.update_layout(
+        xaxis=dict(rangeslider=dict(visible=False)),
+        yaxis=dict(title="Price", rangemode="tozero"),
+        yaxis2=dict(
+            title="Vol",
+            overlaying="y",
+            side="right",
+            rangemode="tozero",
+            showgrid=False,
+            matches=None
+        ),
+        height=740,
+        uirevision="keep"
+    )
 
-px_all = np.concatenate([df["low"].values, df["close"].values, df["high"].values]).astype(float)
-lo = float(np.nanpercentile(px_all, 0.5))
-hi = float(np.nanpercentile(px_all, 99.5))
-if hi > lo:
-    pad = 0.02 * (hi - lo)
-    fig.update_yaxes(range=[lo - pad, hi + pad])
+    px_all = np.concatenate([df["low"].values, df["close"].values, df["high"].values]).astype(float)
+    lo = float(np.nanpercentile(px_all, 0.5))
+    hi = float(np.nanpercentile(px_all, 99.5))
+    if hi > lo:
+        pad = 0.02 * (hi - lo)
+        fig.update_yaxes(range=[lo - pad, hi + pad])
 
-if "x_range" in st.session_state:
-    fig.update_xaxes(range=st.session_state["x_range"])
-if "y_range" in st.session_state:
-    fig.update_yaxes(range=st.session_state["y_range"])
+    if "x_range" in st.session_state:
+        fig.update_xaxes(range=st.session_state["x_range"])
+    if "y_range" in st.session_state:
+        fig.update_yaxes(range=st.session_state["y_range"])
 
-if chart_visible:
     if PLOTLY_EVENTS_AVAILABLE and lock_zoom:
         ev = plotly_events(fig, events=["plotly_relayout"], key="relayout")
         if ev:
@@ -635,9 +635,47 @@ if chart_visible:
                 if "yaxis.range[0]" in e:
                     st.session_state["y_range"]=[e["yaxis.range[0]"],e["yaxis.range[1]"]]
     else:
-        st.plotly_chart(fig, use_container_width=True)    
+        st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Chart hidden. Use the 'Show Chart' option in the sidebar to display it.")
+    components.html(
+        """
+        <div style="border-left:4px solid #2d8cff;padding:8px 12px;background:#eef4ff;border-radius:4px;">
+            <strong>Chart hidden.</strong> Use the "Show Chart" option in the sidebar to display it.
+        </div>
+        """,
+        height=60
+    )
+
+# max_len = max(len(supports), len(resistance))
+# components.html('<div style="border-top:2px solid #000000;"></div>', height=16)
+# components.html('<div style="margin:5px 0;font-size:16px;font-family:Arial, sans-serif;">Supports / Resistances</div>', height=25)
+
+# for i in range(max_len):
+#     sup_txt = ""
+#     res_txt = ""
+
+#     if i < len(supports):
+#         px, sc = supports[i]
+#         sup_txt = f'<span style="color:#16c784;font-family:Arial, sans-serif;font-weight:500;">SUP {sc:.0f}% @ {px:.2f}</span>'
+
+#     if i < len(resistance):
+#         px, sc = resistance[i]
+#         res_txt = f'<span style="color:#ea3943;font-family:Arial, sans-serif;font-weight:500;">RES {sc:.0f}% @ {px:.2f}</span>'
+
+#     components.html(
+#         f"""
+#         <div style="
+#             display:flex;
+#             font-size:14px;
+#             width:100%;
+#         ">
+#             <div>{sup_txt}</div>
+#             <div style="margin-left:10px;">{res_txt}</div>
+#         </div>
+#         """,
+#         height=24,
+#         scrolling=False
+#     )
 
 max_len = max(len(supports), len(resistance))
 components.html('<div style="border-top:2px solid #000000;"></div>', height=16)
