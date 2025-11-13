@@ -108,20 +108,31 @@ class Broker:
             return {row["symbol"]: float(row["price"]) for row in data}
         return {data["symbol"]: float(data["price"])}
 
+    def fetch_price(self, symbol: str) -> float:
+        if self.market == "USDM":
+            path = "/fapi/v1/ticker/price"
+        else:
+            path = "/api/v3/ticker/price"
+        r = self._request(path, params={"symbol": symbol})
+        data = r.json()
+        if isinstance(data, list):
+            for row in data:
+                if row.get("symbol") == symbol:
+                    return float(row["price"])
+            raise ValueError(f"Symbol {symbol} not found in ticker response")
+        return float(data["price"])
+
     def place_order(self, symbol: str, side: str, amount: float, price=None, params=None):
         """
         Paper: giả lập fill ở giá last. Không gọi endpoint trade thật trong bản này.
         """
         side = side.upper()
-        last = self.fetch_tickers().get(symbol)
+        try:
+            last = self.fetch_price(symbol)
+        except Exception:
+            last = None
         if last is None:
-            # fallback single ticker
-            if self.market == "USDM":
-                path = "/fapi/v1/ticker/price"
-            else:
-                path = "/api/v3/ticker/price"
-            r = self._request(path, params={"symbol": symbol})
-            last = float(r.json()["price"])
+            raise RuntimeError(f"Unable to fetch market price for {symbol}")
         fill_price = price or last
         rec = {"status":"filled","side":side,"price":fill_price,"amount":amount,"symbol":symbol,"paper":True}
         return rec

@@ -1,0 +1,2 @@
+timestamp,symbol,side,entry,sl,tp,timeframe,actual_price,outcome
+20251109 18:34:57,ETHUSDT,SELL,3648.58,3677.76864,3604.79704,1h,3604.7970,correct

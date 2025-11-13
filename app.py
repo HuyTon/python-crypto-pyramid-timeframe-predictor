@@ -10,6 +10,7 @@ from pathlib import Path
 import csv
 import httpx
 import streamlit.components.v1 as components  # HTML divider iOS safe
+from typing import Optional
 
 from broker import Broker
 from indicators import ema
@@ -48,21 +49,39 @@ def _pred_to_row(rec: dict) -> list:
         rec.get("entry",""),
         rec.get("tp",""),
         rec.get("sl",""),
+        rec.get("market",""),
         rec.get("actual_price",""),
         rec.get("outcome",""),
     ]
 
 def _row_to_pred(row: list) -> dict:
+    # legacy rows without market column
+    timestamp = row[0] if len(row) > 0 else ""
+    symbol = row[1] if len(row) > 1 else ""
+    timeframe = row[2] if len(row) > 2 else ""
+    side = row[3] if len(row) > 3 else ""
+    entry = float(row[4]) if len(row) > 4 and row[4] else ""
+    tp = float(row[5]) if len(row) > 5 and row[5] else ""
+    sl = float(row[6]) if len(row) > 6 and row[6] else ""
+    market = float(row[7]) if len(row) > 7 and row[7] else ""
+    actual_price = row[8] if len(row) > 8 else ""
+    outcome = row[9] if len(row) > 9 else ""
+    # handle old format where market column didn't exist
+    if len(row) == 9:
+        actual_price = row[7]
+        outcome = row[8]
+        market = ""
     return {
-        "timestamp": row[0],
-        "symbol": row[1],
-        "timeframe": row[2],
-        "side": row[3],
-        "entry": float(row[4]) if row[4] else "",
-        "tp": float(row[5]) if row[5] else "",
-        "sl": float(row[6]) if row[6] else "",
-        "actual_price": row[7],
-        "outcome": row[8],
+        "timestamp": timestamp,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "side": side,
+        "entry": entry,
+        "tp": tp,
+        "sl": sl,
+        "market": market,
+        "actual_price": actual_price,
+        "outcome": outcome,
     }
 
 def load_pred_history() -> list:
@@ -82,7 +101,7 @@ def load_pred_history() -> list:
 def save_pred_history(preds: list):
     with PRED_FILE.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["timestamp","symbol","timeframe","side","entry","tp","sl","actual_price","outcome"])
+        writer.writerow(["timestamp","symbol","timeframe","side","entry","tp","sl","market","actual_price","outcome"])
         for rec in preds:
             writer.writerow(_pred_to_row(rec))
 
@@ -249,6 +268,16 @@ lock_zoom = st.sidebar.toggle(
     "", value=True, label_visibility="collapsed", key="lock_zoom"
 )
 
+st.sidebar.text("Chart Display")
+chart_menu = st.sidebar.radio(
+    "",
+    options=["Hide Chart", "Show Chart"],
+    index=0,
+    label_visibility="collapsed",
+    key="chart_visibility"
+)
+chart_visible = chart_menu == "Show Chart"
+
 if draw_top != DRAW_TOP:
     CFG["levels"]["draw_top"] = int(draw_top)
     with open("config.yaml","w") as f: yaml.safe_dump(CFG, f)
@@ -341,6 +370,22 @@ def fetch_df(symbol_key, timeframe_key):
     df["dt"] = pd.to_datetime(df["ts"], unit="ms")
     return df
 
+def get_market_price(symbol_key: str, fallback_df: Optional[pd.DataFrame] = None) -> float:
+    try:
+        return float(broker.fetch_price(symbol_key))
+    except Exception:
+        pass
+    if fallback_df is not None and not fallback_df.empty:
+        try:
+            return float(fallback_df["close"].iloc[-1])
+        except Exception:
+            pass
+    try:
+        df_latest = fetch_df(symbol_key, "1m")
+        return float(df_latest["close"].iloc[-1])
+    except Exception:
+        return float("nan")
+
 def _crosses(lo, hi, lv, tol):  # candle cross detection
     return (lo <= lv*(1+tol)) and (hi >= lv*(1-tol))
 
@@ -349,17 +394,26 @@ def evaluate_all_predictions(pred_list):
     for rec in list(pred_list):
         if rec.get("outcome"): continue
 
-        sym, tf_ = rec["symbol"], rec["timeframe"]
-        side = rec["side"]
-        entry, tp, sl = float(rec["entry"]), float(rec["tp"]), float(rec["sl"])
-        ts = rec["timestamp"]
+        sym = rec.get("symbol")
+        tf_ = rec.get("timeframe") or tf
+        side = (rec.get("side") or "").upper()
+        try:
+            entry = float(rec["entry"])
+            tp = float(rec["tp"])
+            sl = float(rec["sl"])
+        except (TypeError, ValueError):
+            continue
+        ts = rec.get("timestamp","")
 
         try:
             ts_ms = int(datetime.strptime(ts,"%Y%m%d %H:%M:%S").timestamp()*1000)
         except:
             continue
 
-        df_tf = fetch_df(sym, tf_)
+        try:
+            df_tf = fetch_df(sym, tf_)
+        except Exception:
+            continue
         df_after = df_tf[df_tf["ts"] >= ts_ms]
         if df_after.empty: continue
 
@@ -369,22 +423,47 @@ def evaluate_all_predictions(pred_list):
                 entry_idx = idx; break
         if entry_idx is None: continue
 
-        hit = None
+        outcome = None
+        hit_price = None
+        half_tp = (entry + tp) / 2.0
+        half_sl = (entry + sl) / 2.0
+
+        def _tp_hit(hi, lo):
+            return hi >= tp*(1-HIT_TOL) if side == "BUY" else lo <= tp*(1+HIT_TOL)
+
+        def _sl_hit(hi, lo):
+            return lo <= sl*(1+HIT_TOL) if side == "BUY" else hi >= sl*(1-HIT_TOL)
+
+        def _tp_half(hi, lo):
+            return hi >= half_tp if side == "BUY" else lo <= half_tp
+
+        def _sl_half(hi, lo):
+            return lo <= half_sl if side == "BUY" else hi >= half_sl
+
         for _, r in df_after.loc[entry_idx:].iterrows():
-            hi, lo, o = r["high"], r["low"], r["open"]
-            if side == "BUY":
-                tp_hit, sl_hit = hi >= tp*(1-HIT_TOL), lo <= sl*(1+HIT_TOL)
-            else:
-                tp_hit, sl_hit = lo <= tp*(1+HIT_TOL), hi >= sl*(1-HIT_TOL)
-
+            hi, lo, o = float(r["high"]), float(r["low"]), float(r["open"])
+            tp_hit = _tp_hit(hi, lo)
+            sl_hit = _sl_hit(hi, lo)
             if tp_hit and sl_hit:
-                hit = ("correct", tp) if abs(o-tp)<abs(o-sl) else ("wrong", sl); break
-            if tp_hit: hit=("correct", tp); break
-            if sl_hit: hit=("wrong", sl); break
+                prefer_tp = abs(o - tp) <= abs(o - sl)
+                outcome = "correct" if prefer_tp else "wrong"
+                hit_price = tp if prefer_tp else sl
+                break
+            if tp_hit:
+                outcome = "correct"; hit_price = tp; break
+            if sl_hit:
+                outcome = "wrong"; hit_price = sl; break
 
-        if hit:
-            rec["outcome"] = hit[0]
-            rec["actual_price"] = f"{hit[1]:.4f}"
+            tp_half_hit = _tp_half(hi, lo)
+            sl_half_hit = _sl_half(hi, lo)
+            if tp_half_hit:
+                outcome = "correct"; hit_price = half_tp; break
+            if sl_half_hit:
+                outcome = "wrong"; hit_price = half_sl; break
+
+        if outcome:
+            rec["outcome"] = outcome
+            rec["actual_price"] = f"{hit_price:.4f}" if hit_price is not None else ""
             log_prediction(rec, basename="predictions")
             changed = True
     return changed
@@ -402,11 +481,12 @@ df["ema_l"] = ema(df["close"], int(CFG["strategy"]["ema_long"]))
 df["ema_sig"] = ema(df["close"], int(CFG["strategy"]["ema_signal"]))
 
 side, entry, sl, tp, viz_levels, meta = engine.propose_trade(df_h4, df_h1, df_15, CFG)
+current_market_price = get_market_price(symbol, df)
 
 # --- Telegram notify for current symbol
 tele_cfg_runtime = load_telegram_cfg()
 if tele_cfg_runtime.get("enabled"):
-    price_now_current = float(df["close"].iloc[-1])
+    price_now_current = current_market_price
     notify_if_entry_changed(symbol, side, float(entry), float(tp), float(sl), price_now_current, tele_cfg_runtime)
 
 # --- Telegram notify for watch list (other symbols)
@@ -419,7 +499,7 @@ if tele_cfg_runtime.get("enabled") and watch_list:
             df_h1_s = fetch_df(sym, "1h")
             df_15_s = fetch_df(sym, "15m")
             s_side, s_entry, s_sl, s_tp, _, _ = engine.propose_trade(df_h4_s, df_h1_s, df_15_s, CFG)
-            price_now_s = float(df_sym["close"].iloc[-1])
+            price_now_s = get_market_price(sym, df_sym)
             notify_if_entry_changed(sym, s_side, float(s_entry), float(s_tp), float(s_sl), price_now_s, tele_cfg_runtime)
         except Exception:
             pass
@@ -442,10 +522,33 @@ if st.session_state.pred_history:
     last = st.session_state.pred_history[-1]
     if same_pred(last):
         last["timestamp"] = _ts
+        last["market"] = current_market_price
     else:
-        st.session_state.pred_history.append({"timestamp":_ts,"symbol":symbol,"side":side,"entry":entry,"sl":sl,"tp":tp,"timeframe":tf,"actual_price":"","outcome":""})
+        st.session_state.pred_history.append({
+            "timestamp":_ts,
+            "symbol":symbol,
+            "side":side,
+            "entry":entry,
+            "sl":sl,
+            "tp":tp,
+            "market": current_market_price,
+            "timeframe":tf,
+            "actual_price":"",
+            "outcome":"",
+        })
 else:
-    st.session_state.pred_history.append({"timestamp":_ts,"symbol":symbol,"side":side,"entry":entry,"sl":sl,"tp":tp,"timeframe":tf,"actual_price":"","outcome":""})
+    st.session_state.pred_history.append({
+        "timestamp":_ts,
+        "symbol":symbol,
+        "side":side,
+        "entry":entry,
+        "sl":sl,
+        "tp":tp,
+            "market": current_market_price,
+        "timeframe":tf,
+        "actual_price":"",
+        "outcome":"",
+    })
 
 save_pred_history(st.session_state.pred_history)
 st.session_state.pred_history = st.session_state.pred_history[-50:]
@@ -453,19 +556,15 @@ st.session_state.pred_history = st.session_state.pred_history[-50:]
 # ---------------------
 # CHART
 # ---------------------
+
 fig = go.Figure()
-# Candles (y1)
 fig.add_candlestick(x=df["dt"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price")
-# Volume (y2)
 fig.add_bar(x=df["dt"], y=df["volume"], name="Volume", opacity=0.25, yaxis="y2")
-# EMAs (y1)
 fig.add_scatter(x=df["dt"], y=df["ema_s"], name="EMA short")
 fig.add_scatter(x=df["dt"], y=df["ema_l"], name="EMA long")
 fig.add_scatter(x=df["dt"], y=df["ema_sig"], name="EMA signal")
-# Pred point (y1)
 fig.add_scatter(x=[df["dt"].iloc[-1]], y=[entry], mode="markers+text",
                 text=[f"{side} @ {entry:.2f}"], textposition="top center")
-# TP/SL (y1)
 fig.add_hline(y=tp, line_color="#16c784", line_dash="dot", annotation_text=f"TP {tp:.2f}")
 fig.add_hline(y=sl, line_color="#ea3943", line_dash="dot", annotation_text=f"SL {sl:.2f}")
 
@@ -498,7 +597,6 @@ if isinstance(viz_levels,dict):
     for px,sc in resistance:
         fig.add_hline(y=px, line_color="#ea3943", opacity=0.6, line_dash="dot", annotation_text=f"RES {sc:.0f}% @ {px:.2f}")
 
-# Giữ y2 riêng, tránh match y1
 fig.update_traces(yaxis="y2", selector=dict(type="bar"))
 fig.update_layout(
     xaxis=dict(rangeslider=dict(visible=False)),
@@ -515,7 +613,6 @@ fig.update_layout(
     uirevision="keep"
 )
 
-# clamp y theo percentile để né outlier
 px_all = np.concatenate([df["low"].values, df["close"].values, df["high"].values]).astype(float)
 lo = float(np.nanpercentile(px_all, 0.5))
 hi = float(np.nanpercentile(px_all, 99.5))
@@ -523,24 +620,25 @@ if hi > lo:
     pad = 0.02 * (hi - lo)
     fig.update_yaxes(range=[lo - pad, hi + pad])
 
-# Zoom lock (session remembered)
 if "x_range" in st.session_state:
     fig.update_xaxes(range=st.session_state["x_range"])
 if "y_range" in st.session_state:
     fig.update_yaxes(range=st.session_state["y_range"])
 
-if PLOTLY_EVENTS_AVAILABLE and lock_zoom:
-    ev = plotly_events(fig, events=["plotly_relayout"], key="relayout")
-    if ev:
-        for e in ev:
-            if "xaxis.range[0]" in e:
-                st.session_state["x_range"]=[e["xaxis.range[0]"],e["xaxis.range[1]"]]
-            if "yaxis.range[0]" in e:
-                st.session_state["y_range"]=[e["yaxis.range[0]"],e["yaxis.range[1]"]]
+if chart_visible:
+    if PLOTLY_EVENTS_AVAILABLE and lock_zoom:
+        ev = plotly_events(fig, events=["plotly_relayout"], key="relayout")
+        if ev:
+            for e in ev:
+                if "xaxis.range[0]" in e:
+                    st.session_state["x_range"]=[e["xaxis.range[0]"],e["xaxis.range[1]"]]
+                if "yaxis.range[0]" in e:
+                    st.session_state["y_range"]=[e["yaxis.range[0]"],e["yaxis.range[1]"]]
+    else:
+        st.plotly_chart(fig, use_container_width=True)    
 else:
-    st.plotly_chart(fig, use_container_width=True)
+    st.info("Chart hidden. Use the 'Show Chart' option in the sidebar to display it.")
 
-# ---- render supports + resistances on the SAME line ----
 max_len = max(len(supports), len(resistance))
 components.html('<div style="border-top:2px solid #000000;"></div>', height=16)
 components.html('<div style="margin:5px 0;font-size:16px;font-family:Arial, sans-serif;">Supports / Resistances</div>', height=25)
@@ -560,7 +658,7 @@ for i in range(max_len):
     components.html(
         f"""
         <div style="
-            display:flex;            
+            display:flex;
             font-size:14px;
             width:100%;
         ">
@@ -575,7 +673,14 @@ for i in range(max_len):
 ios_safe_divider()
 st.sidebar.text("Prediction History")
 hist_df = pd.DataFrame(st.session_state.pred_history)
-st.sidebar.dataframe(hist_df.tail(50), use_container_width=True)
+if not hist_df.empty:
+    if "market" in hist_df.columns:
+        hist_df["market"] = pd.to_numeric(hist_df["market"], errors="coerce")
+    display_cols = ["timestamp","symbol","market","side","entry","tp","sl","actual_price","outcome"]
+    available_cols = [c for c in display_cols if c in hist_df.columns]
+    st.sidebar.dataframe(hist_df[available_cols].tail(50), use_container_width=True)
+else:
+    st.sidebar.dataframe(hist_df, use_container_width=True)
 
 # evaluate predictions
 evaluate_all_predictions(st.session_state.pred_history)

@@ -7,7 +7,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 def log_prediction(record: Dict[str, Any], basename="predictions"):
     csv_path = os.path.join(LOG_DIR, f"{basename}.csv")
     txt_path = os.path.join(LOG_DIR, f"{basename}.txt")
-    header = ["timestamp","symbol","side","entry","sl","tp","timeframe","actual_price","outcome"]
+    header = ["timestamp","symbol","market","side","entry","sl","tp","timeframe","actual_price","outcome"]
     write_header = not os.path.exists(csv_path)
     with open(csv_path, "a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=header)

@@ -1,0 +1,1 @@
+{"timestamp": "20251109 18:34:57", "symbol": "ETHUSDT", "timeframe": "1h", "side": "SELL", "entry": 3648.58, "tp": 3604.79704, "sl": 3677.76864, "actual_price": "3604.7970", "outcome": "correct"}
