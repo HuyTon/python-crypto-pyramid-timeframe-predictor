@@ -298,7 +298,7 @@ st.set_page_config(
 )
 SIDEBAR_WIDTH = "50vw"
 SIDEBAR_WIDTH_MOBILE = "100vw"
-st.markdown(
+components.html(
     f"""
     <style>
     [data-testid="stSidebar"] {{
@@ -308,7 +308,7 @@ st.markdown(
     div[data-testid="stAppViewContainer"] > .main {{
         margin-left: {SIDEBAR_WIDTH};
     }}
-    &#64;media screen and (max-width: 900px) {{
+    @media screen and (max-width: 900px) {{
         [data-testid="stSidebar"] {{
             width: {SIDEBAR_WIDTH_MOBILE} !important;
             min-width: {SIDEBAR_WIDTH_MOBILE} !important;
@@ -319,7 +319,7 @@ st.markdown(
     }}
     </style>
     """,
-    unsafe_allow_html=True
+    height=0
 )
 
 with open("config.yaml","r") as f:
