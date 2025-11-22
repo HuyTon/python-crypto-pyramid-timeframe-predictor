@@ -297,6 +297,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 SIDEBAR_WIDTH = "50vw"
+SIDEBAR_WIDTH_MOBILE = "100vw"
 st.markdown(
     f"""
     <style>
@@ -306,6 +307,15 @@ st.markdown(
     }}
     div[data-testid="stAppViewContainer"] > .main {{
         margin-left: {SIDEBAR_WIDTH};
+    }}
+    @media screen and (max-width: 900px) {{
+        [data-testid="stSidebar"] {{
+            width: {SIDEBAR_WIDTH_MOBILE} !important;
+            min-width: {SIDEBAR_WIDTH_MOBILE} !important;
+        }}
+        div[data-testid="stAppViewContainer"] > .main {{
+            margin-left: {SIDEBAR_WIDTH_MOBILE};
+        }}
     }}
     </style>
     """,
