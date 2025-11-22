@@ -133,24 +133,45 @@ class PyramidTimeframeStrategy:
         lvl_cfg = cfg.get("levels", {})
         window_pct = max(entry_buffer * 2, float(lvl_cfg.get("window_pct", 8)) / 100.0)
 
+        entry_candidates_raw = []
         if side == "BUY":
+            def _buy_rank(lvl):
+                return (-lvl[1], abs(lvl[0]-price_now))
             upper_entry = price_now * (1 - entry_buffer)
             lower_entry = price_now * (1 - window_pct)
             below = [lvl for lvl in sups if lvl[0] <= upper_entry]
-            pick = sorted(below, key=lambda x: (-x[1], abs(x[0]-price_now)))[:1] or sups[:1]
-            entry = float(pick[0][0]) if pick else price_now * (1 - entry_buffer)
+            ranked = sorted(below, key=_buy_rank) if below else sorted(sups, key=_buy_rank)
+            entry_candidates_raw = ranked[:3]
+            entry = float(entry_candidates_raw[0][0]) if entry_candidates_raw else price_now * (1 - entry_buffer)
             entry = float(np.clip(entry, lower_entry, upper_entry))
             sl = entry * (1 - strat_cfg.get("stop_loss_pct", 0.8)/100.0)
             tp = entry * (1 + strat_cfg.get("take_profit_pct", 1.2)/100.0)
         else:
+            def _sell_rank(lvl):
+                return (-lvl[1], abs(lvl[0]-price_now))
             lower_entry = price_now * (1 + entry_buffer)
             upper_entry = price_now * (1 + window_pct)
             above = [lvl for lvl in ress if lvl[0] >= lower_entry]
-            pick = sorted(above, key=lambda x: (-x[1], abs(x[0]-price_now)))[:1] or ress[:1]
-            entry = float(pick[0][0]) if pick else price_now * (1 + entry_buffer)
+            ranked = sorted(above, key=_sell_rank) if above else sorted(ress, key=_sell_rank)
+            entry_candidates_raw = ranked[:3]
+            entry = float(entry_candidates_raw[0][0]) if entry_candidates_raw else price_now * (1 + entry_buffer)
             entry = float(np.clip(entry, lower_entry, upper_entry))
             sl = entry * (1 + strat_cfg.get("stop_loss_pct", 0.8)/100.0)
             tp = entry * (1 - strat_cfg.get("take_profit_pct", 1.2)/100.0)
+
+        if not entry_candidates_raw:
+            entry_candidates_raw = [(entry, None)]
+
+        entry_candidates_meta = []
+        for px, sc in entry_candidates_raw:
+            try:
+                score_val = float(sc)
+            except (TypeError, ValueError):
+                score_val = None
+            entry_candidates_meta.append({
+                "price": float(px),
+                "score": score_val
+            })
 
         meta = {
             "h4_bias": bias_h4,
@@ -162,6 +183,7 @@ class PyramidTimeframeStrategy:
             "combined_score": float(total_score),
             **meta_h4
         }
+        meta["entry_candidates"] = entry_candidates_meta
         viz_levels = {"supports": sups, "resists": ress}
         return side, entry, sl, tp, viz_levels, meta
 

@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
-from functools import lru_cache
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -39,6 +38,65 @@ DATA_DIR.mkdir(exist_ok=True)
 PRED_FILE = DATA_DIR / "prediction_history.csv"
 TELE_CFG_FILE = DATA_DIR / "telegram.yaml"
 TELE_STATE_FILE = DATA_DIR / "telewatch_state.json"
+MAX_PRED_RECORDS_PER_SYMBOL = 3
+
+def _safe_float(val):
+    try:
+        if val in ("", None):
+            return ""
+        return float(val)
+    except (TypeError, ValueError):
+        return ""
+
+def _build_entry_slots(primary_entry, candidates):
+    slots = []
+    primary_val = _safe_float(primary_entry)
+    for cand in candidates or []:
+        price = _safe_float((cand or {}).get("price"))
+        if price == "":
+            continue
+        score = _safe_float((cand or {}).get("score"))
+        slots.append((price, score))
+    if primary_val != "":
+        match_idx = next(
+            (idx for idx, (price, _) in enumerate(slots) if price != "" and abs(price - primary_val) < 1e-6),
+            None
+        )
+        if match_idx is not None:
+            slots.insert(0, slots.pop(match_idx))
+        else:
+            if slots:
+                slots[0] = (primary_val, slots[0][1])
+            else:
+                slots.append((primary_val, ""))
+    if not slots:
+        slots.append(("", ""))
+    while len(slots) < 3:
+        slots.append(("", ""))
+    return slots[:3]
+
+def _keep_last_symbol_records(history: list, symbol: str, keep: int):
+    keep = max(keep, 0)
+    matches = [idx for idx, rec in enumerate(history) if rec.get("symbol") == symbol]
+    drop = max(0, len(matches) - keep)
+    if drop <= 0:
+        return
+    new_history = []
+    removed = 0
+    for rec in history:
+        if rec.get("symbol") == symbol and removed < drop:
+            removed += 1
+            continue
+        new_history.append(rec)
+    history[:] = new_history
+
+def enforce_symbol_record_limit(history: list, limit: int = MAX_PRED_RECORDS_PER_SYMBOL):
+    if limit <= 0:
+        history.clear()
+        return
+    symbols = {rec.get("symbol") for rec in history}
+    for sym in symbols:
+        _keep_last_symbol_records(history, sym, limit)
 
 def _pred_to_row(rec: dict) -> list:
     return [
@@ -52,6 +110,11 @@ def _pred_to_row(rec: dict) -> list:
         rec.get("market",""),
         rec.get("actual_price",""),
         rec.get("outcome",""),
+        rec.get("entry1_score",""),
+        rec.get("entry2",""),
+        rec.get("entry2_score",""),
+        rec.get("entry3",""),
+        rec.get("entry3_score",""),
     ]
 
 def _row_to_pred(row: list) -> dict:
@@ -66,6 +129,11 @@ def _row_to_pred(row: list) -> dict:
     market = float(row[7]) if len(row) > 7 and row[7] else ""
     actual_price = row[8] if len(row) > 8 else ""
     outcome = row[9] if len(row) > 9 else ""
+    entry1_score = _safe_float(row[10]) if len(row) > 10 else ""
+    entry2 = _safe_float(row[11]) if len(row) > 11 else ""
+    entry2_score = _safe_float(row[12]) if len(row) > 12 else ""
+    entry3 = _safe_float(row[13]) if len(row) > 13 else ""
+    entry3_score = _safe_float(row[14]) if len(row) > 14 else ""
     # handle old format where market column didn't exist
     if len(row) == 9:
         actual_price = row[7]
@@ -82,6 +150,11 @@ def _row_to_pred(row: list) -> dict:
         "market": market,
         "actual_price": actual_price,
         "outcome": outcome,
+        "entry1_score": entry1_score,
+        "entry2": entry2,
+        "entry2_score": entry2_score,
+        "entry3": entry3,
+        "entry3_score": entry3_score,
     }
 
 def load_pred_history() -> list:
@@ -96,12 +169,16 @@ def load_pred_history() -> list:
             if not r: continue
             try: out.append(_row_to_pred(r))
             except: pass
+    enforce_symbol_record_limit(out)
     return out
 
 def save_pred_history(preds: list):
     with PRED_FILE.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["timestamp","symbol","timeframe","side","entry","tp","sl","market","actual_price","outcome"])
+        writer.writerow([
+            "timestamp","symbol","timeframe","side","entry","tp","sl","market","actual_price","outcome",
+            "entry1_score","entry2","entry2_score","entry3","entry3_score"
+        ])
         for rec in preds:
             writer.writerow(_pred_to_row(rec))
 
@@ -214,7 +291,26 @@ def notify_if_entry_changed(sym: str, side: str, entry: float, tp: float, sl: fl
 # ---------------------
 # STREAMLIT UI
 # ---------------------
-st.set_page_config(page_title="Crypto Futures Dashboard", layout="wide")
+st.set_page_config(
+    page_title="Crypto Futures Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+SIDEBAR_WIDTH = "50vw"
+st.markdown(
+    f"""
+    <style>
+    [data-testid="stSidebar"] {{
+        width: {SIDEBAR_WIDTH} !important;
+        min-width: {SIDEBAR_WIDTH} !important;
+    }}
+    div[data-testid="stAppViewContainer"] > .main {{
+        margin-left: {SIDEBAR_WIDTH};
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 with open("config.yaml","r") as f:
     CFG = yaml.safe_load(f)
@@ -232,6 +328,13 @@ DRAW_TOP = int(lvl_cfg.get("draw_top", 3))
 WIN_PCT = float(lvl_cfg.get("window_pct", 8)) / 100
 TOL_PCT = float(lvl_cfg.get("cluster_tol_pct", 0.12))
 POOL_MAX = int(lvl_cfg.get("max_per_side", 12))
+cache_cfg = CFG.get("cache", {}) or {}
+try:
+    DATA_CACHE_TTL = int(cache_cfg.get("data_ttl_seconds", 180))
+except (TypeError, ValueError):
+    DATA_CACHE_TTL = 180
+if DATA_CACHE_TTL < 0:
+    DATA_CACHE_TTL = 0
 
 # ---------------------
 # Sidebar (NO MARKDOWN)
@@ -356,9 +459,9 @@ save_telegram_cfg(new_cfg)
 broker = Broker(CFG)
 engine = PyramidTimeframeStrategy(CFG)
 
-@lru_cache(maxsize=64)
-def fetch_df(symbol_key, timeframe_key):
-    data = broker.fetch_ohlcv(symbol_key, timeframe=timeframe_key, limit=1000)
+@st.cache_data(show_spinner=False, ttl=DATA_CACHE_TTL)
+def fetch_df(symbol_key, timeframe_key, limit: int = 1000):
+    data = broker.fetch_ohlcv(symbol_key, timeframe=timeframe_key, limit=limit)
     df = pd.DataFrame(data, columns=["ts","open","high","low","close","volume"])
     # ép float để tránh outlier do string/NaN
     df[["open","high","low","close","volume"]] = df[["open","high","low","close","volume"]].astype(float)
@@ -506,6 +609,11 @@ if "pred_history" not in st.session_state:
     st.session_state.pred_history = load_pred_history()
 
 _ts = datetime.now(SGT).strftime("%Y%m%d %H:%M:%S")
+entry_candidates = meta.get("entry_candidates") or []
+entry_slots = _build_entry_slots(entry, entry_candidates)
+entry1_score = entry_slots[0][1]
+entry2_val, entry2_score = entry_slots[1]
+entry3_val, entry3_score = entry_slots[2]
 
 def same_pred(last):
     return (
@@ -518,7 +626,17 @@ if st.session_state.pred_history:
     if same_pred(last):
         last["timestamp"] = _ts
         last["market"] = current_market_price
+        last["entry1_score"] = entry1_score
+        last["entry2"] = entry2_val
+        last["entry2_score"] = entry2_score
+        last["entry3"] = entry3_val
+        last["entry3_score"] = entry3_score
     else:
+        _keep_last_symbol_records(
+            st.session_state.pred_history,
+            symbol,
+            MAX_PRED_RECORDS_PER_SYMBOL - 1
+        )
         st.session_state.pred_history.append({
             "timestamp":_ts,
             "symbol":symbol,
@@ -530,6 +648,11 @@ if st.session_state.pred_history:
             "timeframe":tf,
             "actual_price":"",
             "outcome":"",
+            "entry1_score": entry1_score,
+            "entry2": entry2_val,
+            "entry2_score": entry2_score,
+            "entry3": entry3_val,
+            "entry3_score": entry3_score,
         })
 else:
     st.session_state.pred_history.append({
@@ -543,6 +666,11 @@ else:
         "timeframe":tf,
         "actual_price":"",
         "outcome":"",
+        "entry1_score": entry1_score,
+        "entry2": entry2_val,
+        "entry2_score": entry2_score,
+        "entry3": entry3_val,
+        "entry3_score": entry3_score,
     })
 
 save_pred_history(st.session_state.pred_history)
@@ -709,7 +837,27 @@ hist_df = pd.DataFrame(st.session_state.pred_history)
 if not hist_df.empty:
     if "market" in hist_df.columns:
         hist_df["market"] = pd.to_numeric(hist_df["market"], errors="coerce")
-    display_cols = ["timestamp","symbol","market","side","entry","tp","sl","actual_price","outcome"]
+    def _fmt_entry(row, price_col, score_col):
+        price = row.get(price_col, "")
+        score = row.get(score_col, "")
+        try:
+            price_f = float(price)
+        except (TypeError, ValueError):
+            return ""
+        if np.isnan(price_f):
+            return ""
+        base = f"{price_f:.2f}"
+        try:
+            score_f = float(score)
+        except (TypeError, ValueError):
+            score_f = ""
+        if score_f == "" or np.isnan(score_f):
+            return base
+        return f"{base} ({score_f:.0f}%)"
+    hist_df["entry1"] = hist_df.apply(lambda r: _fmt_entry(r, "entry", "entry1_score"), axis=1)
+    hist_df["entry2"] = hist_df.apply(lambda r: _fmt_entry(r, "entry2", "entry2_score"), axis=1)
+    hist_df["entry3"] = hist_df.apply(lambda r: _fmt_entry(r, "entry3", "entry3_score"), axis=1)
+    display_cols = ["timestamp","symbol","market","side","entry1","entry2","entry3","tp","sl","actual_price","outcome"]
     available_cols = [c for c in display_cols if c in hist_df.columns]
     st.sidebar.dataframe(hist_df[available_cols].tail(50), use_container_width=True)
 else:
